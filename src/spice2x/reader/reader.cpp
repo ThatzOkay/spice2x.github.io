@@ -1,8 +1,11 @@
 #include "reader.h"
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -12,7 +15,9 @@
 #include "structuredmessage.h"
 
 static std::vector<std::thread *> READER_THREADS;
-static bool READER_THREAD_RUNNING = false;
+static std::atomic<bool> READER_THREAD_RUNNING { false };
+static std::condition_variable READER_STOP_CV;
+static std::mutex READER_STOP_MTX;
 
 Reader::Reader(const std::string &port) : port(port) {
 
@@ -39,7 +44,7 @@ Reader::Reader(const std::string &port) : port(port) {
 }
 
 Reader::~Reader() {
-    if (this->serial_handle) {
+    if (this->serial_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(this->serial_handle);
         log_info("reader", "closed reader on {}", this->port);
     }
@@ -442,16 +447,23 @@ void start_reader_thread(const std::string &port, int id) {
                     }
 
                     if (did_read_card) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+                        std::unique_lock<std::mutex> lock(READER_STOP_MTX);
+                        READER_STOP_CV.wait_for(lock, std::chrono::milliseconds(2500),
+                                [] { return !READER_THREAD_RUNNING.load(); });
                     }
 
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    std::unique_lock<std::mutex> lock(READER_STOP_MTX);
+                    READER_STOP_CV.wait_for(lock, std::chrono::milliseconds(20),
+                            [] { return !READER_THREAD_RUNNING.load(); });
                 }
             }
 
             // sleep between reader connection retries
-            if (READER_THREAD_RUNNING)
-                std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+            if (READER_THREAD_RUNNING) {
+                std::unique_lock<std::mutex> lock(READER_STOP_MTX);
+                READER_STOP_CV.wait_for(lock, std::chrono::milliseconds(5000),
+                        [] { return !READER_THREAD_RUNNING.load(); });
+            }
         }
     }));
 
@@ -460,15 +472,14 @@ void start_reader_thread(const std::string &port, int id) {
 }
 
 void stop_reader_thread() {
+    READER_THREAD_RUNNING = false;
+    READER_STOP_CV.notify_all();
 
-    // stop threads
-    if (READER_THREAD_RUNNING) {
-        READER_THREAD_RUNNING = false;
+    for (auto *t : READER_THREADS) {
+        if (t->joinable()) {
+            t->join();
+        }
+        delete t;
     }
-
-    // kill threads
-    while (!READER_THREADS.empty()) {
-        delete READER_THREADS.back();
-        READER_THREADS.pop_back();
-    }
+    READER_THREADS.clear();
 }
