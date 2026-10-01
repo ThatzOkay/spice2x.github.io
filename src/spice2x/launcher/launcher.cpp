@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <shlwapi.h>
 #include <windows.h>
@@ -71,6 +72,7 @@
 #include "games/qks/qks.h"
 #include "games/mfg/mfg.h"
 #include "games/pc/pc.h"
+#include "games/udn/udn.h"
 #include "games/museca/museca.h"
 #include "hooks/avshook.h"
 #include "hooks/audio/audio.h"
@@ -84,6 +86,7 @@
 #include "hooks/lang.h"
 #include "hooks/networkhook.h"
 #include "hooks/icmphook_net.h"
+#include "hooks/nicspoof.h"
 #include "hooks/unisintrhook.h"
 #include "launcher/launcher.h"
 #include "launcher/logger.h"
@@ -246,6 +249,7 @@ int main_implementation(int argc, char *argv[]) {
     bool attach_qks = false;
     bool attach_mfg = false;
     bool attach_pc = false;
+    bool attach_udn = false;
     bool attach_museca = false;
     bool show_cursor_if_no_touch = false;
 
@@ -257,6 +261,7 @@ int main_implementation(int argc, char *argv[]) {
     bool load_stubs = false;
     bool netfix_disable = false;
     bool icmphook_enable = false;
+    NicSpoofConfig nicspoof_cfg;
     bool lang_disable = false;
     std::string process_priority_str = "high";
     bool cardio_enabled = false;
@@ -781,6 +786,9 @@ int main_implementation(int argc, char *argv[]) {
     if (options[launcher::Options::LoadPCModule].value_bool()) {
         attach_pc = true;
     }
+    if (options[launcher::Options::LoadUDNModule].value_bool()) {
+        attach_udn = true;
+    }
     if (options[launcher::Options::LoadMusecaModule].value_bool()) {
         attach_museca = true;
     }
@@ -798,6 +806,44 @@ int main_implementation(int argc, char *argv[]) {
     }
     if (options[launcher::Options::EnableICMPHook].value_bool()) {
         icmphook_enable = true;
+    }
+    if (options[launcher::Options::EnableNICSpoof].is_active()) {
+        const auto &mode = options[launcher::Options::EnableNICSpoof].value_text();
+        if (mode == "offline" || mode == "/ENABLED") {
+            nicspoof_cfg.mode = NicSpoofMode::Offline;
+        } else if (mode == "tunnelhost") {
+            nicspoof_cfg.mode = NicSpoofMode::TunnelHost;
+        } else if (mode == "tunnelclient") {
+            nicspoof_cfg.mode = NicSpoofMode::TunnelClient;
+        } else {
+            log_warning("launcher", "unknown -nicspoof value '{}', ignoring", mode);
+        }
+    }
+    if (nicspoof_cfg.mode != NicSpoofMode::Off) {
+        if (options[launcher::Options::NICSpoofIP].is_active()) {
+            unsigned a = 0, b = 0, c = 0, d = 0;
+            char trail = 0;
+            const auto &ip = options[launcher::Options::NICSpoofIP].value_text();
+            if (sscanf(ip.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &trail) == 4 &&
+                    a <= 255 && b <= 255 && c <= 255 && d <= 255) {
+                nicspoof_cfg.local_ip = (a << 24) | (b << 16) | (c << 8) | d;
+            } else {
+                log_warning("launcher", "invalid -nicspoofip '{}'", ip);
+            }
+        }
+        if (options[launcher::Options::NICSpoofHostRealIP].is_active()) {
+            nicspoof_cfg.hub_host =
+                    options[launcher::Options::NICSpoofHostRealIP].value_text();
+        }
+        if (options[launcher::Options::NICSpoofPort].is_active()) {
+            const uint32_t p =
+                    options[launcher::Options::NICSpoofPort].value_uint32();
+            if (p == 0 || p > 65535) {
+                log_warning("launcher", "invalid -nicspoofport {}", p);
+            } else {
+                nicspoof_cfg.tunnel_port = static_cast<uint16_t>(p);
+            }
+        }
     }
     if (options[launcher::Options::DisableACPHook].value_bool()) {
         lang_disable = true;
@@ -1447,6 +1493,12 @@ int main_implementation(int argc, char *argv[]) {
     }
     if (options[launcher::Options::PCKnobMode].value_bool()) {
         games::pc::PC_KNOB_MODE = true;
+    }
+    if (options[launcher::Options::UDNArgs].is_active()) {
+        games::udn::UDN_INJECT_ARGS = options[launcher::Options::UDNArgs].value_text();
+    }
+    if (options[launcher::Options::UDNNoIO].is_active()) {
+        games::udn::UDN_NO_IO = options[launcher::Options::UDNNoIO].value_bool();
     }
     if (options[launcher::Options::spice2x_EnableSMXStage].value_bool()) {
         rawinput::ENABLE_SMX_STAGE = true;
@@ -2262,6 +2314,16 @@ int main_implementation(int argc, char *argv[]) {
                 break;
             }
 
+            // DANCE aROUND
+            if (check_dll("kamunity.dll") && fileutils::dir_exists("game/dancearound_Data")) {
+                avs::game::DLL_NAME = "kamunity.dll";
+                attach_io = true;
+                attach_udn = true;
+                launcher::signal::USE_VEH_WORKAROUND = true;
+                show_cursor_if_no_touch = true;
+                break;
+            }
+
             // Busou Shinki: Armored Princess Battle Conductor
             if (check_dll("kamunity.dll") && fileutils::file_exists("game/bsac_app.exe")) {
                 avs::game::DLL_NAME = "kamunity.dll";
@@ -2427,6 +2489,10 @@ int main_implementation(int argc, char *argv[]) {
         avs::core::HEAP_SIZE = 536870912; // 512MB
         games.push_back(new games::pc::PCGame());
     }
+    if (attach_udn) {
+        avs::core::HEAP_SIZE = 1073741824; // 1GB
+        games.push_back(new games::udn::UDNGame());
+    }
 
     // apply user heap size, if defined
     if (user_heap_size > 0) {
@@ -2553,7 +2619,15 @@ int main_implementation(int argc, char *argv[]) {
     avs::core::load_dll();
     avs::ea3::load_dll();
 
-    // ICMP emulation (opt-in; before games open raw ICMP sockets)
+    // NIC spoof / matching tunnel first so divert owns overlapping ws2_32
+    // MinHook slots (bind/sendto/recvfrom/...). ICMP then installs only the
+    // non-overlapping socket-creation hooks and is reached via icmphook_try_*.
+    if (nicspoof_cfg.mode != NicSpoofMode::Off) {
+        nicspoof_configure(nicspoof_cfg);
+        nicspoof_init();
+    }
+
+    // ICMP emulation (opt-in; after tunnel so hooks do not collide)
     if (icmphook_enable) {
         icmphook_net_init();
     }
@@ -2859,7 +2933,7 @@ int main_implementation(int argc, char *argv[]) {
         bt5api_dispose();
     }
 
-    sdk::fini_sdk_modules();
+    sdk::fini_sdk_modules(true);
 
     // stop raw input
     hotkeys::disable_raw_input();
