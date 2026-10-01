@@ -150,6 +150,7 @@ namespace launcher {
             LoadQKSModule,
             LoadMFGModule,
             LoadPCModule,
+            LoadUDNModule,
             LoadMusecaModule,
             PathToModules,
             ScreenshotFolder,
@@ -250,6 +251,8 @@ namespace launcher {
             PCArgs,
             PCNoIO,
             PCKnobMode,
+            UDNArgs,
+            UDNNoIO,
             spice2x_LightsOverallBrightness,
             spice2x_WindowBorder,
             spice2x_WindowSize,
@@ -316,6 +319,10 @@ namespace launcher {
             OtocaCamHook,
             DisableHighResTimer,
             EnableICMPHook,
+            EnableNICSpoof,
+            NICSpoofIP,
+            NICSpoofHostRealIP,
+            NICSpoofPort,
             AutoElevate,
             CfgForceSoftwareRender,
             OBSWebSocketEnabled,
@@ -325,6 +332,8 @@ namespace launcher {
             OBSWebSocketDebug,
             ScreenshotIncludeOverlay,
             ScreenshotSubscreens,
+
+            _Count,
         };
 
         enum class OptionsCategory {

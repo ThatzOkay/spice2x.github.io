@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 #define SPICE_SDK_ENTRY_POINT extern "C" __declspec(dllexport) int __cdecl
@@ -237,6 +238,138 @@ typedef SPICE_SDK_STATUS_CODE (__cdecl spice_sdk_add_toast_func)(
     const char *text
 );
 
+// insert_coin (v0.3 and up)
+// adds to the shared coin stock, bypassing the coin blocker like the Spice API
+//
+//   amount: number of coins to insert (0 to 255); use 1 for a single coin
+//           zero succeeds without changing the stock
+
+typedef SPICE_SDK_STATUS_CODE (__cdecl spice_sdk_insert_coin_func)(
+    uint8_t amount
+);
+
+// get_coin_blocker (v0.6 and up)
+// gets the current shared coin blocker state
+// insert_coin bypasses the blocker regardless of this state
+//
+//   blocked: receives true when coins are blocked, false when allowed
+
+typedef SPICE_SDK_STATUS_CODE (__cdecl spice_sdk_get_coin_blocker_func)(
+    bool *blocked
+);
+
+// set_coin_blocker (v0.6 and up)
+// sets the shared coin blocker state used by normal coin input
+// this is not a persistent override; the game can change the state again
+// insert_coin bypasses the blocker regardless of this state
+//
+//   blocked: true to block coins, false to allow them
+
+typedef SPICE_SDK_STATUS_CODE (__cdecl spice_sdk_set_coin_blocker_func)(
+    bool blocked
+);
+
+typedef struct SPICE_SDK_MODULE_INFO {
+    uint32_t size; // initialize to sizeof(SPICE_SDK_MODULE_INFO)
+    uintptr_t base; // loaded address, not the preferred PE image base
+    uint32_t image_size;
+    uint32_t timestamp;
+    uint32_t entry_point; // RVA, not an absolute address
+    uint16_t machine; // PE IMAGE_FILE_MACHINE_* value
+} SPICE_SDK_MODULE_INFO;
+
+// get_module_info (v0.4 and up)
+// gets PE info about an already loaded module
+//
+// does not load or permanently pin the module; the caller must keep it loaded
+// while using the returned base address
+// returns GENERIC_ERROR if not found or unreadable, NOT_SUPPORTED for non-PE32/PE32+
+//
+//   module_name: null-terminated UTF-16 module name or full path
+//   info: receives module info; initialize size to sizeof(SPICE_SDK_MODULE_INFO)
+
+typedef SPICE_SDK_STATUS_CODE (__cdecl spice_sdk_get_module_info_func)(
+    const wchar_t *module_name,
+    SPICE_SDK_MODULE_INFO *info
+);
+
+// get_plugin_directory (v0.4 and up)
+// gets the directory containing a registered SDK DLL
+//
+// available during entry-point initialization and until destroy callbacks finish
+// returns INVALID_ARGUMENT_1 for addresses outside registered SDK DLLs
+//
+//   plugin_address: address of a function or static object in the plugin DLL
+//                   used only to identify the DLL; the pointed-to object is not read
+//                   address of any global variable in your DLL will work
+//   buffer: caller-owned UTF-16 output, or NULL to query the required size
+//   size: input capacity and output required wchar_t count, including the terminator
+//         NULL buffer or insufficient capacity returns TOO_SMALL and sets the
+//         required size without partial output
+
+typedef SPICE_SDK_STATUS_CODE (__cdecl spice_sdk_get_plugin_directory_func)(
+    const void *plugin_address,
+    wchar_t *buffer,
+    uint32_t *size
+);
+
+typedef enum SPICE_SDK_D3D9_EVENT {
+    SPICE_SDK_D3D9_READY = 0,
+    SPICE_SDK_D3D9_DRAW = 1,
+    SPICE_SDK_D3D9_INVALIDATE = 2,
+    SPICE_SDK_D3D9_DESTROY = 3,
+} SPICE_SDK_D3D9_EVENT;
+
+typedef struct SPICE_SDK_D3D9_FRAME {
+    uint32_t size;
+    void *device; // borrowed IDirect3DDevice9*, not Spice's wrapper
+    void *window; // HWND
+    uint32_t width;
+    uint32_t height;
+} SPICE_SDK_D3D9_FRAME;
+
+typedef void (__cdecl spice_sdk_d3d9_callback_func)(
+    SPICE_SDK_D3D9_EVENT event,
+    const SPICE_SDK_D3D9_FRAME *frame,
+    void *userdata
+);
+
+// register_d3d9 (v0.4 and up)
+// registers a process-lifetime renderer for the primary D3D9 presentation target
+//
+// READY precedes drawing on a usable device and follows each successful reset
+// DRAW runs on top of all Spice overlays, even when the overlay is closed; the host
+// binds the backbuffer, brackets the scene, and restores graphics state
+// INVALIDATE precedes reset; release default-pool resources, even if reset fails
+// DESTROY releases all device references before device destruction or SDK shutdown
+// callbacks are serialized; DRAW/READY run on the presentation thread; teardown
+// runs at a graphics-thread boundary, or after the game stops rendering
+// do not throw, block, reset/present the
+// device, or shut down Spice from a callback; frame is valid only during the call
+// no callbacks run after the plugin's SDK destroy callback begins
+// registration from inside a render callback is not supported
+// input capture and non-D3D9 backends are not provided
+//
+//   callback: function in a registered plugin DLL; the DLL is retained until exit
+//   userdata: opaque plugin state passed unchanged to each callback
+
+typedef SPICE_SDK_STATUS_CODE (__cdecl spice_sdk_register_d3d9_func)(
+    spice_sdk_d3d9_callback_func *callback,
+    void *userdata
+);
+
+// hook_library (v0.5 and up)
+//
+// maps an exact LoadLibrary name to a module that the plugin has already loaded
+//
+//   library_name: exact ANSI library name or path used by the target
+//   module: module handle returned by LoadLibrary; keep it loaded until shutdown
+
+typedef SPICE_SDK_STATUS_CODE (__cdecl spice_sdk_hook_library_func)(
+    const char *library_name,
+    void *module
+);
+
 typedef struct SPICE_SDK_V0 {
     uint32_t size;
 
@@ -261,6 +394,18 @@ typedef struct SPICE_SDK_V0 {
     spice_sdk_set_keypad_func *set_keypad;
 
     spice_sdk_add_toast_func *add_toast;
+
+    spice_sdk_insert_coin_func *insert_coin;
+
+    spice_sdk_get_module_info_func *get_module_info;
+    spice_sdk_get_plugin_directory_func *get_plugin_directory;
+
+    spice_sdk_register_d3d9_func *register_d3d9;
+
+    spice_sdk_hook_library_func *hook_library;
+
+    spice_sdk_get_coin_blocker_func *get_coin_blocker;
+    spice_sdk_set_coin_blocker_func *set_coin_blocker;
 
 } SPICE_SDK_V0;
 

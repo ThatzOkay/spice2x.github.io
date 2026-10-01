@@ -331,8 +331,8 @@ int eamuse_coin_consume_stock() {
     return COIN_STOCK.exchange(0, std::memory_order_relaxed);
 }
 
-int eamuse_coin_add() {
-    return COIN_STOCK.fetch_add(1, std::memory_order_relaxed) + 1;
+void eamuse_coin_add(int amount) {
+    COIN_STOCK.fetch_add(amount, std::memory_order_relaxed);
 }
 
 void eamuse_coin_insert() {
@@ -621,6 +621,7 @@ int eamuse_get_game_keypads() {
         avs::game::is_model("JDX") ||
         avs::game::is_model("KDX") ||
         avs::game::is_model("MDX") ||
+        avs::game::is_model("KDM") ||
         avs::game::is_model("J33") ||
         avs::game::is_model("K33") ||
         avs::game::is_model("L33") ||
@@ -637,6 +638,7 @@ int eamuse_get_game_keypads_name() {
 
     if (game_name == "Beatmania IIDX" ||
         game_name == "Dance Dance Revolution" ||
+        game_name == "Dance Evolution" ||
         game_name == "GitaDora")
     {
         return 2;
@@ -730,6 +732,8 @@ void eamuse_autodetect_game() {
         eamuse_set_game("Mahjong Fight Girl");
     else if (avs::game::is_model("XIF"))
         eamuse_set_game("Polaris Chord");
+    else if (avs::game::is_model("UDN"))
+        eamuse_set_game("DANCE aROUND");
     else if (avs::game::is_model("NDD"))
         eamuse_set_game("Silent Scope: Bone Eater");
     else {

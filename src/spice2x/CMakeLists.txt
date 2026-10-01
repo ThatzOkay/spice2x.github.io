@@ -554,6 +554,9 @@ set(SOURCE_FILES ${SOURCE_FILES}
         games/pc/pc.cpp
         games/pc/io.cpp
         games/pc/bi2x_hook.cpp
+        games/udn/udn.cpp
+        games/udn/io.cpp
+        games/udn/bi2x_hook.cpp
 
         # hooks
         hooks/audio/acm.cpp
@@ -605,6 +608,7 @@ set(SOURCE_FILES ${SOURCE_FILES}
         hooks/graphics/backends/d3d9/d3d9_texture.cpp
         hooks/graphics/backends/d3d11/d3d11_backend.cpp
         hooks/graphics/backends/d3d11/d3d11_swapchain.cpp
+        hooks/graphics/backends/d3d11/d3d11_swapchain_udn.cpp
         hooks/graphics/backends/d3d11/d3d11_factory.cpp
         hooks/graphics/backends/d3d11/d3d11_vtable_capture.cpp
         hooks/graphics/backends/d3d11/d3d11_screenshot.cpp
@@ -616,6 +620,8 @@ set(SOURCE_FILES ${SOURCE_FILES}
         hooks/networkhook.cpp
         hooks/icmphook_net.cpp
         hooks/icmphook_iphlpapi.cpp
+        hooks/nicspoof.cpp
+        hooks/nicspoof_tunnel.cpp
         hooks/powrprof.cpp
         #hooks/rom.cpp
         hooks/setupapihook.cpp
@@ -717,6 +723,8 @@ set(SOURCE_FILES ${SOURCE_FILES}
         reader/crypt.cpp
 
         # sdk
+        sdk/d3d9.cpp
+        sdk/modules.cpp
         sdk/sdk.cpp
 
         # stubs
@@ -1045,8 +1053,16 @@ if(NOT MSVC)
 endif()
 
 # sdk_sample_v0_cpp.dll (64 bit)
-set(SOURCE_FILES sdk/sample/v0/cpp/v0_cpp.cpp)
+set(SOURCE_FILES
+    sdk/sample/v0/cpp/v0_cpp.cpp
+    sdk/sample/v0/cpp/v0_cpp_imgui.cpp
+    external/imgui/imgui.cpp
+    external/imgui/imgui_draw.cpp
+    external/imgui/imgui_tables.cpp
+    external/imgui/imgui_widgets.cpp
+    external/imgui/backends/imgui_impl_dx9.cpp)
 add_library(spicetools_sdk_sample_v0_cpp_64 SHARED ${SOURCE_FILES} ${RESOURCE_FILES} sdk/sample/v0/cpp/v0_cpp.def)
+target_link_libraries(spicetools_sdk_sample_v0_cpp_64 PRIVATE imm32)
 set_target_properties(spicetools_sdk_sample_v0_cpp_64 PROPERTIES PREFIX "")
 set_target_properties(spicetools_sdk_sample_v0_cpp_64 PROPERTIES OUTPUT_NAME "sdk_sample_v0_cpp")
 
