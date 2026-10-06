@@ -78,6 +78,7 @@
 #include "hooks/audio/backends/wasapi/downmix.h"
 #include "hooks/debughook.h"
 #include "hooks/devicehook.h"
+#include "hooks/esshook.h"
 #include "hooks/graphics/nvenc_hook.h"
 #include "hooks/input/dinput8/hook.h"
 #include "hooks/graphics/graphics.h"
@@ -95,6 +96,7 @@
 #include "misc/device.h"
 #include "misc/eamuse.h"
 #include "misc/hotkeys.h"
+#include "misc/otaupdate.h"
 #include "misc/extdev.h"
 #include "misc/ami2000.h"
 #include "misc/sciunit.h"
@@ -2433,6 +2435,12 @@ int main_implementation(int argc, char *argv[]) {
         avs::core::HEAP_SIZE = user_heap_size;
     }
 
+    // install updates staged by ess.dll; this replaces game files so it has to happen before the game DLL loads
+    if (options[launcher::Options::spice2x_EnableOTA].value_bool()
+            && !cfg_run && !cfg::CONFIGURATOR_STANDALONE) {
+        ota::apply_staged_updates(std::filesystem::current_path());
+    }
+
     // call pre-attach
     for (auto game : games) {
         game->pre_attach();
@@ -2579,6 +2587,15 @@ int main_implementation(int argc, char *argv[]) {
 
     // load game
     avs::game::load_dll();
+
+#if SPICE64
+    // ess.dll, the service layer of newer games, expects drives that only exist on a cabinet
+    if (options[launcher::Options::spice2x_EnableOTA].value_bool()) {
+        if (const auto ess = libutils::try_module("ess.dll")) {
+            hooks::ess::init(ess);
+        }
+    }
+#endif
 
     // attach games
     for (auto game : games) {

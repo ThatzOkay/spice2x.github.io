@@ -325,6 +325,7 @@ namespace launcher {
             OBSWebSocketDebug,
             ScreenshotIncludeOverlay,
             ScreenshotSubscreens,
+            spice2x_EnableOTA,
         };
 
         enum class OptionsCategory {

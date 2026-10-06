@@ -3444,6 +3444,20 @@ static const std::vector<OptionDefinition> OPTION_DEFINITIONS = {
         .type = OptionType::Bool,
         .category = "General Overlay",
     },
+    {
+        // spice2x_EnableOTA
+        .title = "Enable OTA Updates",
+        .name = "sp2x-ota",
+        .display_name = "ota",
+        .aliases= "ota",
+        .desc = "Allow games that use ess.dll to download and install online updates. The drives they expect "
+            "(E:, F:) are redirected to dev/vfs/drive_e and dev/vfs/drive_f, so updates get staged in "
+            "dev/vfs/drive_f/<model>-001/update/ex. On a cabinet, select.exe installs them on the next "
+            "boot; this does the same on the next launch: all files are verified first, replaced files are "
+            "backed up to dev/vfs/drive_d/update-backup, and the datecode in ea3-config.xml is updated.",
+        .type = OptionType::Bool,
+        .category = "Advanced Network",
+    },
 };
 
 const std::vector<std::string> &launcher::get_categories(Options::OptionsCategory category) {

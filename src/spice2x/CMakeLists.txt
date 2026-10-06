@@ -588,6 +588,7 @@ set(SOURCE_FILES ${SOURCE_FILES}
         hooks/cfgmgr32hook.cpp
         hooks/debughook.cpp
         hooks/devicehook.cpp
+        hooks/esshook.cpp
         hooks/graphics/graphics.cpp
         hooks/graphics/graphics_windowed.cpp
         hooks/graphics/jpeg_encoder.cpp
@@ -639,6 +640,7 @@ set(SOURCE_FILES ${SOURCE_FILES}
         misc/eamuse.cpp
         misc/extdev.cpp
         misc/hotkeys.cpp
+        misc/otaupdate.cpp
         misc/sciunit.cpp
         misc/sde.cpp
         misc/wintouchemu.cpp
