@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstring>
 #include <filesystem>
 #include <string>
 
@@ -38,11 +37,6 @@ static decltype(CopyFileA) *CopyFileA_orig = nullptr;
 static decltype(DeleteFileA) *DeleteFileA_orig = nullptr;
 static decltype(RemoveDirectoryA) *RemoveDirectoryA_orig = nullptr;
 static decltype(SetFileAttributesA) *SetFileAttributesA_orig = nullptr;
-
-// avs2-ea3 package list ordinals used by ess.dll, only hooked to log what it sees
-static int (*ea3_pkglist_count_orig)() = nullptr;
-static int (*ea3_pkglist_next_orig)(uint64_t) = nullptr;
-static int (*ea3_pkglist_get_orig)(uint64_t, int, void *, uint64_t) = nullptr;
 
 // true if the path is the directory ess.dll moves a fully downloaded and extracted update to
 static bool is_staged_update_dir(std::string path) {
@@ -147,18 +141,8 @@ static HANDLE WINAPI CreateFileA_hook(
         DWORD dwFlagsAndAttributes,
         HANDLE hTemplateFile)
 {
-    if (!is_redirected(lpFileName)) {
-        return CreateFileA_orig(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
-                dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
-    }
-
-    auto path = rewrite_path(lpFileName);
-    auto handle = CreateFileA_orig(path.c_str(), dwDesiredAccess, dwShareMode, lpSecurityAttributes,
-            dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
-
-    log_misc("ess", "CreateFileA {} -> {}: {}", lpFileName, path,
-            handle == INVALID_HANDLE_VALUE ? "failed" : "ok");
-    return handle;
+    return CreateFileA_orig(rewrite_path(lpFileName).c_str(), dwDesiredAccess, dwShareMode,
+            lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
 }
 
 static HANDLE WINAPI CreateFileW_hook(
@@ -170,18 +154,8 @@ static HANDLE WINAPI CreateFileW_hook(
         DWORD dwFlagsAndAttributes,
         HANDLE hTemplateFile)
 {
-    if (!is_redirected(lpFileName)) {
-        return CreateFileW_orig(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
-                dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
-    }
-
-    auto path = rewrite_path(lpFileName);
-    auto handle = CreateFileW_orig(path.c_str(), dwDesiredAccess, dwShareMode, lpSecurityAttributes,
-            dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
-
-    log_misc("ess", "CreateFileW {} -> {}: {}", std::filesystem::path(lpFileName).string(),
-            std::filesystem::path(path).string(), handle == INVALID_HANDLE_VALUE ? "failed" : "ok");
-    return handle;
+    return CreateFileW_orig(rewrite_path(lpFileName).c_str(), dwDesiredAccess, dwShareMode,
+            lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
 }
 
 static BOOL WINAPI MoveFileA_hook(LPCSTR lpExistingFileName, LPCSTR lpNewFileName) {
@@ -200,13 +174,8 @@ static BOOL WINAPI MoveFileA_hook(LPCSTR lpExistingFileName, LPCSTR lpNewFileNam
 }
 
 static BOOL WINAPI CopyFileA_hook(LPCSTR lpExistingFileName, LPCSTR lpNewFileName, BOOL bFailIfExists) {
-    auto source = rewrite_path(lpExistingFileName);
-    auto destination = rewrite_path(lpNewFileName);
-
-    auto result = CopyFileA_orig(source.c_str(), destination.c_str(), bFailIfExists);
-
-    log_misc("ess", "CopyFileA {} -> {}: {}", source, destination, result ? "ok" : "failed");
-    return result;
+    return CopyFileA_orig(rewrite_path(lpExistingFileName).c_str(), rewrite_path(lpNewFileName).c_str(),
+            bFailIfExists);
 }
 
 static BOOL WINAPI DeleteFileA_hook(LPCSTR lpFileName) {
@@ -219,36 +188,6 @@ static BOOL WINAPI RemoveDirectoryA_hook(LPCSTR lpPathName) {
 
 static BOOL WINAPI SetFileAttributesA_hook(LPCSTR lpFileName, DWORD dwFileAttributes) {
     return SetFileAttributesA_orig(rewrite_path(lpFileName).c_str(), dwFileAttributes);
-}
-
-static int ea3_pkglist_count_hook() {
-    auto result = ea3_pkglist_count_orig();
-
-    log_misc("ess", "package list count: {}", result);
-    return result;
-}
-
-static int ea3_pkglist_next_hook(uint64_t handle) {
-    auto result = ea3_pkglist_next_orig(handle);
-
-    log_misc("ess", "package list next({}): {}", handle, result);
-    return result;
-}
-
-// fields: 1 = name, 2 = pkgtype, 3 = sumtype, 4 = sum, 5 = size
-static int ea3_pkglist_get_hook(uint64_t handle, int field, void *out, uint64_t size) {
-    auto result = ea3_pkglist_get_orig(handle, field, out, size);
-
-    if (result < 0) {
-        log_warning("ess", "package list get({}, field {}) failed: {}", handle, field, result);
-    } else if (out && field == 1) {
-        log_misc("ess", "package list name: {}",
-                std::string(static_cast<const char *>(out), strnlen(static_cast<const char *>(out), 0x40)));
-    } else if (out && field == 2) {
-        log_misc("ess", "package list type: {}", *static_cast<int *>(out));
-    }
-
-    return result;
 }
 
 void hooks::ess::init(HMODULE module) {
@@ -275,8 +214,4 @@ void hooks::ess::init(HMODULE module) {
     DeleteFileA_orig = detour::iat_try("DeleteFileA", DeleteFileA_hook, module);
     RemoveDirectoryA_orig = detour::iat_try("RemoveDirectoryA", RemoveDirectoryA_hook, module);
     SetFileAttributesA_orig = detour::iat_try("SetFileAttributesA", SetFileAttributesA_hook, module);
-
-    ea3_pkglist_count_orig = detour::iat_try_ordinal("avs2-ea3.dll", 79, ea3_pkglist_count_hook, module);
-    ea3_pkglist_next_orig = detour::iat_try_ordinal("avs2-ea3.dll", 81, ea3_pkglist_next_hook, module);
-    ea3_pkglist_get_orig = detour::iat_try_ordinal("avs2-ea3.dll", 82, ea3_pkglist_get_hook, module);
 }
