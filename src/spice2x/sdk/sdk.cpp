@@ -1,10 +1,14 @@
 #include <vector>
 #include <mutex>
 #include <shared_mutex>
+#include <algorithm>
 
 #include "sdk.h"
+#include "modules.h"
+#include "d3d9.h"
 #include "avs/game.h"
 #include "games/io.h"
+#include "hooks/libraryhook.h"
 #include "launcher/launcher.h"
 #include "misc/eamuse.h"
 #include "overlay/notifications.h"
@@ -31,11 +35,13 @@ static spice_sdk_clear_touch_func sdk_clear_touch;
 static spice_sdk_insert_card_func sdk_insert_card;
 static spice_sdk_set_keypad_func sdk_set_keypad;
 static spice_sdk_add_toast_func sdk_add_toast;
-
-struct SdkModule {
-    std::string dll;
-    HINSTANCE module;
-};
+static spice_sdk_insert_coin_func sdk_insert_coin;
+static spice_sdk_get_coin_blocker_func sdk_get_coin_blocker;
+static spice_sdk_set_coin_blocker_func sdk_set_coin_blocker;
+static spice_sdk_get_module_info_func sdk_get_module_info;
+static spice_sdk_get_plugin_directory_func sdk_get_plugin_directory;
+static spice_sdk_register_d3d9_func sdk_register_d3d9;
+static spice_sdk_hook_library_func sdk_hook_library;
 
 // DLLs
 static int sdk_modules_count = 0;
@@ -45,6 +51,7 @@ static std::shared_mutex sdk_global_mutex;
 // internal
 static bool sdk_initialized = false;
 static bool sdk_shutting_down = false;
+static bool sdk_finalizing = false;
 static std::vector<Button> *buttons;
 static std::vector<Analog> *analogs;
 static std::vector<Light> *lights;
@@ -90,14 +97,22 @@ void init_sdk_modules() {
     }
 }
 
-void fini_sdk_modules() {
+void fini_sdk_modules(bool graphics_stopped) {
     // prevent multiple calls and further calls into sdk_init
     {
         std::unique_lock lock(sdk_global_mutex);
-        if (!sdk_initialized) {
+        if (!sdk_initialized || sdk_finalizing) {
             return;
         }
         sdk_shutting_down = true;
+        sdk_finalizing = true;
+    }
+
+    if (!d3d9::shutdown(graphics_stopped)) {
+        std::unique_lock lock(sdk_global_mutex);
+        sdk_finalizing = false;
+        log_warning("sdk", "deferring plugin teardown: waiting for D3D9 rendering to stop");
+        return;
     }
 
     // call into destroy callback of each DLL
@@ -175,8 +190,37 @@ sdk_init(
     if (v0->size >= RTL_SIZEOF_THROUGH_FIELD(SPICE_SDK_V0, add_toast)) {
         v0->add_toast = sdk_add_toast;
     }
-
     // end of 0.2
+
+    if (v0->size >= RTL_SIZEOF_THROUGH_FIELD(SPICE_SDK_V0, insert_coin)) {
+        v0->insert_coin = sdk_insert_coin;
+    }
+    // end of 0.3
+
+    if (v0->size >= RTL_SIZEOF_THROUGH_FIELD(SPICE_SDK_V0, get_module_info)) {
+        v0->get_module_info = sdk_get_module_info;
+    }
+    if (v0->size >= RTL_SIZEOF_THROUGH_FIELD(SPICE_SDK_V0, get_plugin_directory)) {
+        v0->get_plugin_directory = sdk_get_plugin_directory;
+    }
+    if (v0->size >= RTL_SIZEOF_THROUGH_FIELD(SPICE_SDK_V0, register_d3d9)) {
+        v0->register_d3d9 = sdk_register_d3d9;
+    }
+    // end of 0.4
+
+    if (v0->size >= RTL_SIZEOF_THROUGH_FIELD(SPICE_SDK_V0, hook_library)) {
+        v0->hook_library = sdk_hook_library;
+    }
+    // end of 0.5
+
+    if (v0->size >= RTL_SIZEOF_THROUGH_FIELD(SPICE_SDK_V0, get_coin_blocker)) {
+        v0->get_coin_blocker = sdk_get_coin_blocker;
+    }
+    if (v0->size >= RTL_SIZEOF_THROUGH_FIELD(SPICE_SDK_V0, set_coin_blocker)) {
+        v0->set_coin_blocker = sdk_set_coin_blocker;
+    }
+    // end of 0.6
+
     // any newer minor iterations will need to check the size
 
     {
@@ -187,6 +231,36 @@ sdk_init(
 
     log_info("sdk", "sdk_init returning SUCCESS");
     return SPICE_SDK_STATUS_SUCCESS;
+}
+
+SPICE_SDK_STATUS_CODE
+__cdecl
+sdk_get_module_info(const wchar_t *module_name, SPICE_SDK_MODULE_INFO *info) {
+    std::shared_lock lock(sdk_global_mutex);
+    if (!sdk_initialized) {
+        return SPICE_SDK_STATUS_TOO_LATE;
+    }
+    return modules::get_module_info(module_name, info);
+}
+
+SPICE_SDK_STATUS_CODE
+__cdecl
+sdk_get_plugin_directory(const void *plugin_address, wchar_t *buffer, uint32_t *size) {
+    std::shared_lock lock(sdk_global_mutex);
+    if (!sdk_initialized) {
+        return SPICE_SDK_STATUS_TOO_LATE;
+    }
+    return modules::get_plugin_directory(sdk_modules_list, plugin_address, buffer, size);
+}
+
+SPICE_SDK_STATUS_CODE
+__cdecl
+sdk_register_d3d9(spice_sdk_d3d9_callback_func *callback, void *userdata) {
+    std::shared_lock lock(sdk_global_mutex);
+    if (!sdk_initialized || sdk_shutting_down) {
+        return SPICE_SDK_STATUS_TOO_LATE;
+    }
+    return d3d9::register_d3d9(sdk_modules_list, callback, userdata);
 }
 
 SPICE_SDK_STATUS_CODE
@@ -219,6 +293,7 @@ sdk_log(
             log_warning(facility_str.c_str(), "{}", message);
             break;
         case SPICE_SDK_LOG_LEVEL_FATAL:
+            lock.unlock();
             log_fatal(facility_str.c_str(), "{}", message);
             break;
         default:
@@ -640,5 +715,78 @@ sdk_add_toast(
     return SPICE_SDK_STATUS_SUCCESS;
 }
 
+SPICE_SDK_STATUS_CODE
+__cdecl
+sdk_hook_library(
+    const char *library_name,
+    void *module
+)
+{
+    std::shared_lock lock(sdk_global_mutex);
+    if (sdk_shutting_down || !sdk_initialized) {
+        return SPICE_SDK_STATUS_TOO_LATE;
+    }
+
+    if (!library_name || !library_name[0]) {
+        return SPICE_SDK_STATUS_INVALID_ARGUMENT_1;
+    }
+    if (!module) {
+        return SPICE_SDK_STATUS_INVALID_ARGUMENT_2;
+    }
+
+    libraryhook_hook_library(library_name, static_cast<HMODULE>(module));
+    // launcher::signal::attach enables library hooks before SDK entry points run.
+    return SPICE_SDK_STATUS_SUCCESS;
+}
+
+SPICE_SDK_STATUS_CODE
+__cdecl
+sdk_insert_coin(
+    uint8_t amount
+)
+{
+    std::shared_lock lock(sdk_global_mutex);
+    if (!sdk_initialized) {
+        return SPICE_SDK_STATUS_TOO_LATE;
+    }
+
+    if (amount > 0) {
+        eamuse_coin_add(amount);
+    }
+    return SPICE_SDK_STATUS_SUCCESS;
+}
+
+SPICE_SDK_STATUS_CODE
+__cdecl
+sdk_get_coin_blocker(
+    bool *blocked
+)
+{
+    std::shared_lock lock(sdk_global_mutex);
+    if (!sdk_initialized) {
+        return SPICE_SDK_STATUS_TOO_LATE;
+    }
+    if (!blocked) {
+        return SPICE_SDK_STATUS_INVALID_ARGUMENT_1;
+    }
+
+    *blocked = eamuse_coin_get_block();
+    return SPICE_SDK_STATUS_SUCCESS;
+}
+
+SPICE_SDK_STATUS_CODE
+__cdecl
+sdk_set_coin_blocker(
+    bool blocked
+)
+{
+    std::shared_lock lock(sdk_global_mutex);
+    if (!sdk_initialized) {
+        return SPICE_SDK_STATUS_TOO_LATE;
+    }
+
+    eamuse_coin_set_block(blocked);
+    return SPICE_SDK_STATUS_SUCCESS;
+}
 
 } // namespace sdk
